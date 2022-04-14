@@ -75,11 +75,9 @@ class Tub(object):
         self.manifest.delete_records(record_indexes)
 
     def delete_last_n_records(self, n):
-        # build ordered list of non-deleted indexes
-        all_alive_indexes = sorted(set(range(self.manifest.current_index))
-                                   - self.manifest.deleted_indexes)
-        to_delete_indexes = all_alive_indexes[-n:]
-        self.manifest.delete_records(to_delete_indexes)
+        last_index = self.manifest.current_index
+        first_index = max(last_index - n, 0)
+        self.manifest.delete_records(range(first_index, last_index))
 
     def restore_records(self, record_indexes):
         self.manifest.restore_records(record_indexes)
@@ -128,6 +126,8 @@ class TubWriter(object):
 
     def shutdown(self):
         self.close()
+
+
 
 
 class TubWiper:

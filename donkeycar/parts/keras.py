@@ -75,6 +75,20 @@ class KerasPilot(ABC):
         assert self.model, 'Model not set'
         return self.model.inputs[0].shape
 
+    # def run(self, img_arr: np.ndarray, other_arr: np.ndarray = None) \
+    #         -> Tuple[Union[float, np.ndarray], ...]:
+    #     """
+    #     Donkeycar parts interface to run the part in the loop.
+
+    #     :param img_arr:     uint8 [0,255] numpy array with image data
+    #     :param other_arr:   numpy array of additional data to be used in the
+    #                         pilot, like IMU array for the IMU model or a
+    #                         state vector in the Behavioural model
+    #     :return:            tuple of (angle, throttle)
+    #     """
+    #     norm_arr = normalize_image(img_arr)
+    #     return self.inference(norm_arr, other_arr)
+
     def run(self, img_arr: np.ndarray, other_arr: np.ndarray = None) \
             -> Tuple[Union[float, np.ndarray], ...]:
         """
@@ -86,8 +100,21 @@ class KerasPilot(ABC):
                             state vector in the Behavioural model
         :return:            tuple of (angle, throttle)
         """
-        norm_arr = normalize_image(img_arr)
-        return self.inference(norm_arr, other_arr)
+        
+        adversarial_attack = True
+        if adversarial_attack:
+            imagem = img_arr.reshape((1,) + img_arr.shape)
+            label_to_pass = self.model.predict(imagem)
+            perturbation = self.adversarial_pattern(imagem, label_to_pass).numpy()
+            perturb = ((perturbation[0]*0.5 + 0.5)*255)-50
+            adv_img = np.clip(img_arr + (perturb*0.8), 0, 255)
+            adv_img = adv_img.astype(int)
+            norm_arr = normalize_image(adv_img)
+            return self.inference(norm_arr, other_arr)
+        else:
+            norm_arr = normalize_image(img_arr)
+            return self.inference(norm_arr, other_arr)
+
 
     @abstractmethod
     def inference(self, img_arr: np.ndarray, other_arr: np.ndarray) \
@@ -258,9 +285,7 @@ class KerasCategorical(KerasPilot):
             return 0.0, 0.0
 
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        angle_binned_tensor, throttle_binned_tensor = self.model(img_arr)
-        angle_binned = angle_binned_tensor.numpy()
-        throttle_binned = throttle_binned_tensor.numpy()
+        angle_binned, throttle_binned = self.model.predict(img_arr)
         N = len(throttle_binned[0])
         throttle = dk.utils.linear_unbin(throttle_binned, N=N,
                                          offset=0.0, R=self.throttle_range)
@@ -303,11 +328,23 @@ class KerasLinear(KerasPilot):
     def compile(self):
         self.model.compile(optimizer=self.optimizer, loss='mse')
 
+    def adversarial_pattern(self, image, label):
+        image = tf.cast(image, tf.float32)
+        with tf.GradientTape() as tape:
+            tape.watch(image)
+            prediction = self.model(image)
+            loss = tf.keras.losses.MSE(label, prediction)
+        
+        gradient = tape.gradient(loss, image)
+        signed_grad = tf.sign(gradient)
+        
+        return signed_grad
+
     def inference(self, img_arr, other_arr):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        outputs = self.model(img_arr)
-        steering = outputs[0].numpy()
-        throttle = outputs[1].numpy()
+        outputs = self.model.predict(img_arr)
+        steering = outputs[0]
+        throttle = outputs[1]
         return steering[0][0], throttle[0][0]
 
     def y_transform(self, record: TubRecord):
@@ -341,8 +378,8 @@ class KerasInferred(KerasPilot):
 
     def inference(self, img_arr, other_arr):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        outputs = self.model(img_arr)
-        steering = outputs[0].numpy()
+        outputs = self.model.predict(img_arr)
+        steering = outputs[0]
         return steering[0], dk.utils.throttle(steering[0])
 
     def y_transform(self, record: TubRecord):
@@ -400,9 +437,9 @@ class KerasIMU(KerasPilot):
     def inference(self, img_arr, other_arr):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
         imu_arr = np.array(other_arr).reshape(1, self.num_imu_inputs)
-        outputs = self.model([img_arr, imu_arr])
-        steering = outputs[0].numpy()
-        throttle = outputs[1].numpy()
+        outputs = self.model.predict([img_arr, imu_arr])
+        steering = outputs[0]
+        throttle = outputs[1]
         return steering[0][0], throttle[0][0]
 
     def y_transform(self, record: TubRecord):
@@ -427,9 +464,7 @@ class KerasBehavioral(KerasPilot):
     def inference(self, img_arr, state_array):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
         bhv_arr = np.array(state_array).reshape(1, len(state_array))
-        angle_binned_tensor, throttle_tensor = self.model([img_arr, bhv_arr])
-        angle_binned = angle_binned_tensor.numpy()
-        throttle = throttle_tensor.numpy()
+        angle_binned, throttle = self.model.predict([img_arr, bhv_arr])
         # In order to support older models with linear throttle,we will test for
         # shape of throttle to see if it's the newer binned version.
         N = len(throttle[0])
@@ -465,10 +500,7 @@ class KerasLocalizer(KerasPilot):
         
     def inference(self, img_arr, other_arr):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        angle_t, throttle_t, track_loc_t = self.model([img_arr])
-        angle = angle_t.numpy()
-        throttle = throttle_t.numpy()
-        track_loc = track_loc_t.numpy()
+        angle, throttle, track_loc = self.model.predict([img_arr])
         loc = np.argmax(track_loc[0])
         return angle, throttle, loc
 
@@ -658,9 +690,9 @@ class KerasRNN_LSTM(KerasPilot):
         
         img_arr = np.array(self.img_seq).reshape((1, self.seq_length,
                                                   *self.input_shape))
-        outputs = self.model([img_arr])
-        steering = outputs[0][0].numpy()
-        throttle = outputs[0][1].numpy()
+        outputs = self.model.predict([img_arr])
+        steering = outputs[0][0]
+        throttle = outputs[0][1]
         return steering, throttle
 
 
@@ -725,9 +757,9 @@ class Keras3D_CNN(KerasPilot):
         
         img_arr = np.array(self.img_seq).reshape((1, self.seq_length,
                                                   *self.input_shape))
-        outputs = self.model([img_arr])
-        steering = outputs[0][0].numpy()
-        throttle = outputs[0][1].numpy()
+        outputs = self.model.predict([img_arr])
+        steering = outputs[0][0]
+        throttle = outputs[0][1]
         return steering, throttle
 
 
@@ -813,9 +845,9 @@ class KerasLatent(KerasPilot):
 
     def inference(self, img_arr, other_arr):
         img_arr = img_arr.reshape((1,) + img_arr.shape)
-        outputs = self.model(img_arr)
-        steering = outputs[1].numpy()
-        throttle = outputs[2].numpy()
+        outputs = self.model.predict(img_arr)
+        steering = outputs[1]
+        throttle = outputs[2]
         return steering[0][0], throttle[0][0]
 
 
