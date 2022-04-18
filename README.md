@@ -99,7 +99,7 @@ With the Donkeycar installed, run the models available in this [repository](http
 Run the linear model available in this repo and copy it to your local Donkeycar folder on your computer. Make sure you put inside the folder `mycar/models`. Then to copy it to the Raspberry Pi in your car, use the following command. The rsync command is used to sync the folder models from your computer with the folder models from your Raspberry Pi. 
 
 ````
-rsync -rv --progress --partial ~/mycar/models/pilot-10k-linear-morning10am.h5 pi@raspberrypi:~/mycar/models/
+rsync -rv --progress --partial ~/mycar/models/tub633-and-attack-08-5k.h5 pi@raspberrypi:~/mycar/models/
 ````
 
 With the model transferred to the car, you are ready to experiment with the self-driving model.
@@ -113,7 +113,7 @@ ssh pi@raspberrypi
 Then connected to the security shell of your Raspberry Pi you can run the following command to run a model. 
 
 ````
-python manage.py drive --model ~/mycar/models/ptub633-and-attack-08-5k.h5
+python manage.py drive --model ~/mycar/models/tub633-and-attack-08-5k.h5
 ````
 
 It is essential to notice that you don't have to train these models added to this repo. They had already been trained. The process of training a neural network involves providing examples of labeled data as input and applying mathematical and statistical concepts such as feed-forward and error backpropagation. Those functions will gradually reduce the error between the predicted output and the desired output across several iterations over the dataset. Each cycle of complete training iterations is called an epoch. The training session is composed of as many epochs needed until the model can no longer improve its prediction performance.
